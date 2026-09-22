@@ -59,8 +59,6 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
 .aspectRow button{flex:0 0 auto;}
 .aspectRow button.active{border-color:var(--accent); color:var(--accent);}
 .cursor{display:inline-block;}
-.letterFade{display:inline-block; opacity:0; animation:letterFadeIn 0.12s ease-out forwards;}
-@keyframes letterFadeIn{from{opacity:0; transform:translateY(2px);} to{opacity:1; transform:translateY(0);}}
 #lyricText{white-space:nowrap; overflow:hidden;}
 #stageBgImg{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none;}
 #lyricText{
@@ -234,6 +232,10 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <div class="checkboxRow">
           <input type="checkbox" id="includeAudioTransparent" checked>
           <label style="margin:0;" for="includeAudioTransparent">Include audio in transparent export</label>
+        </div>
+        <div class="checkboxRow">
+          <input type="checkbox" id="cropToText">
+          <label style="margin:0;" for="cropToText">Crop to text area only (thin strip, not full frame)</label>
         </div>
         <div class="row" style="margin-top:8px;">
           <button id="exportBgBtn">Export with background</button>
@@ -709,9 +711,17 @@ function updateLyricDisplay(){
       for(let i = typewriterState.charsShown; i < targetChars; i++){
         const ch = active.text[i];
         const span = document.createElement('span');
-        span.className = 'letterFade';
+        span.style.display = 'inline-block';
+        span.style.opacity = '0';
+        span.style.transform = 'translateY(2px)';
+        span.style.transition = 'opacity 0.12s ease-out, transform 0.12s ease-out';
         span.innerHTML = ch === ' ' ? '&nbsp;' : escapeHtml(ch);
         letterSpan.appendChild(span);
+        void span.offsetWidth;
+        requestAnimationFrame(()=>{
+          span.style.opacity = '1';
+          span.style.transform = 'translateY(0)';
+        });
       }
       typewriterState.charsShown = targetChars;
     }
@@ -751,9 +761,10 @@ audioEl.addEventListener('pause', ()=>{
 });
 
 // --- Export ---
-function buildFrameDrawer(canvas, targetW, targetH, transparent){
+function buildFrameDrawer(canvas, targetW, targetH, transparent, refH){
   const ctx = canvas.getContext('2d');
   const bgType = document.querySelector('input[name="bgType"]:checked').value;
+  const scaleRefH = refH || targetH;
   return function drawFrame(){
     ctx.clearRect(0,0,targetW,targetH);
     if(!transparent){
@@ -770,12 +781,11 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent){
     const t = audioEl.currentTime;
     const active = lines.find(l=>t>=l.start && t<l.end);
     if(active){
-      const scale = targetH/(stage.clientHeight||640);
+      const scale = scaleRefH/(stage.clientHeight||640);
       let fsz = Math.round((+fontSize.value) * scale);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const yPct = +textPos.value/100;
-      const y = targetH*yPct;
+      const y = (scaleRefH === targetH) ? targetH*(+textPos.value/100) : targetH/2;
       const x = targetW/2;
       const maxW = targetW*0.9;
       const animMode = document.getElementById('animStyle').value;
@@ -821,10 +831,18 @@ let stopRequested = false;
 async function runExport(transparent){
   if(!lines.length){ setStatus(exportStatus,'Load a subtitle file first.','err'); return; }
   if(!audioEl.src){ setStatus(exportStatus,'Load an audio file first.','err'); return; }
-  const [w,h] = document.getElementById('exportRes').value.split('x').map(Number);
+  const [fullW,fullH] = document.getElementById('exportRes').value.split('x').map(Number);
+  const cropMode = document.getElementById('cropToText').checked;
+  let w = fullW, h = fullH;
+  if(cropMode){
+    const scale = fullH / (stage.clientHeight||640);
+    const fsz = Math.round((+fontSize.value) * scale);
+    w = fullW;
+    h = Math.round(fsz * 3.2);
+  }
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
-  const drawFrame = buildFrameDrawer(canvas, w, h, transparent);
+  const drawFrame = buildFrameDrawer(canvas, w, h, transparent, cropMode ? fullH : h);
 
   const includeAudio = transparent ? document.getElementById('includeAudioTransparent').checked : true;
 

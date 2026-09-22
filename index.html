@@ -61,6 +61,9 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
 .cursor{display:inline-block;}
 .cursor.blink{animation:blinkAnim 1s steps(1) infinite;}
 @keyframes blinkAnim{0%,49%{opacity:1;}50%,100%{opacity:0;}}
+.letterFade{display:inline-block; opacity:0; animation:letterFadeIn 0.12s ease-out forwards;}
+@keyframes letterFadeIn{from{opacity:0; transform:translateY(2px);} to{opacity:1; transform:translateY(0);}}
+#lyricText{white-space:nowrap; overflow:hidden;}
 #stageBgImg{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none;}
 #lyricText{
   position:absolute; left:5%; right:5%; text-align:center;
@@ -136,6 +139,10 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <div class="checkboxRow" id="cursorRow" style="display:none;">
           <input type="checkbox" id="showCursor" checked>
           <label style="margin:0;" for="showCursor">Blinking cursor while typing</label>
+        </div>
+        <div id="speedRow" style="display:none;">
+          <label for="typeSpeed">Typing speed: <span id="typeSpeedVal">35</span> chars/sec</label>
+          <input type="range" id="typeSpeed" min="8" max="80" value="35">
         </div>
         <div class="row">
           <div>
@@ -472,7 +479,12 @@ document.getElementById('customFontFile').addEventListener('change', async (e)=>
 
 // --- Animation controls ---
 document.getElementById('animStyle').addEventListener('change', (e)=>{
-  document.getElementById('cursorRow').style.display = e.target.value==='typewriter' ? 'flex' : 'none';
+  const isType = e.target.value==='typewriter';
+  document.getElementById('cursorRow').style.display = isType ? 'flex' : 'none';
+  document.getElementById('speedRow').style.display = isType ? 'block' : 'none';
+});
+document.getElementById('typeSpeed').addEventListener('input', (e)=>{
+  document.getElementById('typeSpeedVal').textContent = e.target.value;
 });
 
 // --- Background controls ---
@@ -670,21 +682,43 @@ seek.addEventListener('input', ()=>{
   audioEl.currentTime = (seek.value/1000)*dur;
 });
 
+function fitOneLine(el, baseSize){
+  el.style.fontSize = baseSize + 'px';
+  let size = baseSize;
+  const maxW = el.parentElement.clientWidth * 0.9;
+  while(el.scrollWidth > maxW && size > 8){
+    size -= 1;
+    el.style.fontSize = size + 'px';
+  }
+}
+
 function updateLyricDisplay(){
   const t = audioEl.currentTime;
   const active = lines.find(l=>t>=l.start && t<l.end);
   if(!active){ lyricText.innerHTML = ''; return; }
   const animMode = document.getElementById('animStyle').value;
+  const baseSize = +fontSize.value;
   if(animMode === 'typewriter'){
-    const dur = Math.max(0.2, active.end - active.start);
-    const progress = Math.min(1, (t - active.start) / Math.min(dur, dur*0.7 + 0.6));
-    const chars = Math.floor(active.text.length * progress);
+    const cps = +document.getElementById('typeSpeed').value;
+    const elapsed = t - active.start;
+    const exactChars = elapsed * cps;
+    const chars = Math.max(0, Math.min(active.text.length, Math.floor(exactChars)));
     const shown = active.text.slice(0, chars);
+    const isTyping = chars < active.text.length;
     const showCursor = document.getElementById('showCursor').checked;
-    const cursorHtml = showCursor ? '<span class="cursor blink">_</span>' : '';
-    lyricText.innerHTML = escapeHtml(shown) + (chars < active.text.length ? cursorHtml : (showCursor ? '<span class="cursor">_</span>' : ''));
+    let html = '';
+    for(let i=0;i<shown.length;i++){
+      const ch = shown[i] === ' ' ? '&nbsp;' : escapeHtml(shown[i]);
+      html += `<span class="letterFade">${ch}</span>`;
+    }
+    if(showCursor){
+      html += isTyping ? '<span class="cursor">_</span>' : '<span class="cursor blink">_</span>';
+    }
+    lyricText.innerHTML = html;
+    fitOneLine(lyricText, baseSize);
   } else {
     lyricText.textContent = active.text;
+    fitOneLine(lyricText, baseSize);
   }
   if(active.id !== selectedLineId){
     selectedLineId = active.id;
@@ -712,8 +746,8 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent){
     const t = audioEl.currentTime;
     const active = lines.find(l=>t>=l.start && t<l.end);
     if(active){
-      const fsz = Math.round((+fontSize.value) * (targetH/ (stage.clientHeight||640)));
-      ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
+      const scale = targetH/(stage.clientHeight||640);
+      let fsz = Math.round((+fontSize.value) * scale);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const yPct = +textPos.value/100;
@@ -722,41 +756,37 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent){
       const maxW = targetW*0.9;
       const animMode = document.getElementById('animStyle').value;
       let displayText = active.text;
+      let cursorChar = '';
       if(animMode === 'typewriter'){
-        const dur = Math.max(0.2, active.end - active.start);
-        const progress = Math.min(1, (t - active.start) / Math.min(dur, dur*0.7 + 0.6));
-        const chars = Math.floor(active.text.length * progress);
+        const cps = +document.getElementById('typeSpeed').value;
+        const elapsed = t - active.start;
+        const chars = Math.max(0, Math.min(active.text.length, Math.floor(elapsed*cps)));
         displayText = active.text.slice(0, chars);
+        const isTyping = chars < active.text.length;
         if(document.getElementById('showCursor').checked){
-          const cursorOn = Math.floor(t*2) % 2 === 0;
-          if(cursorOn || chars < active.text.length) displayText += '_';
+          const cursorOn = isTyping || Math.floor(t*2) % 2 === 0;
+          if(cursorOn) cursorChar = '_';
         }
       }
-      const words = displayText.split(' ');
-      let linesW = [];
-      let cur = '';
-      for(const w of words){
-        const test = cur ? cur+' '+w : w;
-        if(ctx.measureText(test).width > maxW && cur){ linesW.push(cur); cur = w; }
-        else cur = test;
+      // shrink to fit on one line
+      ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
+      while(ctx.measureText(displayText+cursorChar).width > maxW && fsz > 8){
+        fsz -= 1;
+        ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
       }
-      if(cur) linesW.push(cur);
-      const lineH = fsz*1.25;
-      const totalH = linesW.length*lineH;
+      const fullLine = displayText + cursorChar;
       const op = (+boxOpacity.value)/100;
       if(op>0){
         const bc = hexToRgb(boxColor.value);
+        const w2 = ctx.measureText(fullLine).width;
         ctx.fillStyle = `rgba(${bc.r},${bc.g},${bc.b},${op})`;
-        ctx.fillRect(x-maxW/2-20, y-totalH/2-14, maxW+40, totalH+28);
+        ctx.fillRect(x-w2/2-20, y-fsz*0.75-14, w2+40, fsz*1.5+28);
       }
-      linesW.forEach((lw,i)=>{
-        const ly = y - totalH/2 + lineH*i + lineH/2;
-        ctx.lineWidth = Math.max(2, fsz*0.08);
-        ctx.strokeStyle = outlineColor.value;
-        ctx.strokeText(lw, x, ly);
-        ctx.fillStyle = textColor.value;
-        ctx.fillText(lw, x, ly);
-      });
+      ctx.lineWidth = Math.max(2, fsz*0.08);
+      ctx.strokeStyle = outlineColor.value;
+      ctx.strokeText(fullLine, x, y);
+      ctx.fillStyle = textColor.value;
+      ctx.fillText(fullLine, x, y);
     }
   };
 }

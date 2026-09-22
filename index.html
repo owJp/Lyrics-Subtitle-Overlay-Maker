@@ -59,8 +59,6 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
 .aspectRow button{flex:0 0 auto;}
 .aspectRow button.active{border-color:var(--accent); color:var(--accent);}
 .cursor{display:inline-block;}
-.cursor.blink{animation:blinkAnim 1s steps(1) infinite;}
-@keyframes blinkAnim{0%,49%{opacity:1;}50%,100%{opacity:0;}}
 .letterFade{display:inline-block; opacity:0; animation:letterFadeIn 0.12s ease-out forwards;}
 @keyframes letterFadeIn{from{opacity:0; transform:translateY(2px);} to{opacity:1; transform:translateY(0);}}
 #lyricText{white-space:nowrap; overflow:hidden;}
@@ -240,6 +238,7 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <div class="row" style="margin-top:8px;">
           <button id="exportBgBtn">Export with background</button>
           <button id="exportAlphaBtn">Export transparent (WebM)</button>
+          <button id="stopExportBtn" disabled>Stop recording</button>
         </div>
         <div class="status" id="exportStatus"></div>
         <div class="hint">Transparent export is WebM (VP9 alpha) since browsers can't encode transparent MP4. Import it into Kdenlive as an overlay.</div>
@@ -682,22 +681,12 @@ seek.addEventListener('input', ()=>{
   audioEl.currentTime = (seek.value/1000)*dur;
 });
 
-function fitOneLine(el, baseSize){
-  el.style.fontSize = baseSize + 'px';
-  let size = baseSize;
-  const maxW = el.parentElement.clientWidth * 0.9;
-  while(el.scrollWidth > maxW && size > 8){
-    size -= 1;
-    el.style.fontSize = size + 'px';
-  }
-}
-
 function updateLyricDisplay(){
   const t = audioEl.currentTime;
   const active = lines.find(l=>t>=l.start && t<l.end);
   if(!active){ lyricText.innerHTML = ''; return; }
   const animMode = document.getElementById('animStyle').value;
-  const baseSize = +fontSize.value;
+  lyricText.style.fontSize = fontSize.value + 'px';
   if(animMode === 'typewriter'){
     const cps = +document.getElementById('typeSpeed').value;
     const elapsed = t - active.start;
@@ -712,19 +701,31 @@ function updateLyricDisplay(){
       html += `<span class="letterFade">${ch}</span>`;
     }
     if(showCursor){
-      html += isTyping ? '<span class="cursor">_</span>' : '<span class="cursor blink">_</span>';
+      const cursorVisible = isTyping || (Math.floor(t*2) % 2 === 0);
+      html += `<span class="cursor" style="opacity:${cursorVisible ? 1 : 0}">_</span>`;
     }
     lyricText.innerHTML = html;
-    fitOneLine(lyricText, baseSize);
   } else {
     lyricText.textContent = active.text;
-    fitOneLine(lyricText, baseSize);
   }
   if(active.id !== selectedLineId){
     selectedLineId = active.id;
     renderLineList();
   }
 }
+
+let previewRafId = null;
+function previewLoop(){
+  updateLyricDisplay();
+  if(!audioEl.paused){ previewRafId = requestAnimationFrame(previewLoop); }
+}
+audioEl.addEventListener('play', ()=>{
+  if(previewRafId) cancelAnimationFrame(previewRafId);
+  previewRafId = requestAnimationFrame(previewLoop);
+});
+audioEl.addEventListener('pause', ()=>{
+  if(previewRafId) cancelAnimationFrame(previewRafId);
+});
 
 // --- Export ---
 function buildFrameDrawer(canvas, targetW, targetH, transparent){
@@ -791,6 +792,9 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent){
   };
 }
 
+let activeRecorder = null;
+let stopRequested = false;
+
 async function runExport(transparent){
   if(!lines.length){ setStatus(exportStatus,'Load a subtitle file first.','err'); return; }
   if(!audioEl.src){ setStatus(exportStatus,'Load an audio file first.','err'); return; }
@@ -803,26 +807,24 @@ async function runExport(transparent){
 
   const canvasStream = canvas.captureStream(30);
   let finalStream = canvasStream;
-  let audioDest = null;
   if(includeAudio){
     if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     const src = audioCtx.createMediaElementSource(audioEl.cloneNode(true));
-    audioDest = audioCtx.createMediaStreamDestination();
+    const audioDest = audioCtx.createMediaStreamDestination();
     src.connect(audioDest);
     src.connect(audioCtx.destination);
     finalStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioDest.stream.getAudioTracks()]);
   }
 
-  const mime = transparent
-    ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm')
-    : (MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm');
-
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
   const recorder = new MediaRecorder(finalStream, {mimeType: mime, videoBitsPerSecond: 8_000_000});
   const chunks = [];
   recorder.ondataavailable = (e)=>{ if(e.data.size>0) chunks.push(e.data); };
 
-  setStatus(exportStatus, 'Rendering... this plays through the full song in real time.', 'ok');
-  exportBgBtn.disabled = true; exportAlphaBtn.disabled = true;
+  setStatus(exportStatus, 'Recording... click Stop recording to finish early, or let the song play to the end.', 'ok');
+  exportBgBtn.disabled = true; exportAlphaBtn.disabled = true; stopExportBtn.disabled = false;
+  stopRequested = false;
+  activeRecorder = recorder;
 
   audioEl.currentTime = 0;
   await new Promise(r=>setTimeout(r,100));
@@ -832,11 +834,15 @@ async function runExport(transparent){
   const tick = ()=>{ drawFrame(); raf = requestAnimationFrame(tick); };
   tick();
 
-  if(includeAudio){ audioEl.muted = false; } 
   audioEl.play();
 
   await new Promise(resolve=>{
     audioEl.onended = resolve;
+    stopExportBtn.onclick = ()=>{
+      stopRequested = true;
+      audioEl.pause();
+      resolve();
+    };
   });
 
   cancelAnimationFrame(raf);
@@ -850,12 +856,15 @@ async function runExport(transparent){
   a.download = transparent ? 'lyric-overlay-transparent.webm' : 'lyric-overlay.webm';
   a.click();
 
-  setStatus(exportStatus, 'Export complete: ' + a.download, 'ok');
-  exportBgBtn.disabled = false; exportAlphaBtn.disabled = false;
+  const recordedLen = fmt(audioEl.currentTime);
+  setStatus(exportStatus, 'Export complete (' + recordedLen + ' recorded): ' + a.download, 'ok');
+  exportBgBtn.disabled = false; exportAlphaBtn.disabled = false; stopExportBtn.disabled = true;
+  activeRecorder = null;
 }
 
 const exportBgBtn = document.getElementById('exportBgBtn');
 const exportAlphaBtn = document.getElementById('exportAlphaBtn');
+const stopExportBtn = document.getElementById('stopExportBtn');
 exportBgBtn.addEventListener('click', ()=>runExport(false));
 exportAlphaBtn.addEventListener('click', ()=>runExport(true));
 

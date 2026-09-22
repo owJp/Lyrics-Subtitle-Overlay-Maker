@@ -681,32 +681,55 @@ seek.addEventListener('input', ()=>{
   audioEl.currentTime = (seek.value/1000)*dur;
 });
 
+let typewriterState = { lineId: null, charsShown: 0 };
+
 function updateLyricDisplay(){
   const t = audioEl.currentTime;
   const active = lines.find(l=>t>=l.start && t<l.end);
-  if(!active){ lyricText.innerHTML = ''; return; }
+  if(!active){
+    lyricText.innerHTML = '';
+    typewriterState = { lineId: null, charsShown: 0 };
+    return;
+  }
   const animMode = document.getElementById('animStyle').value;
   lyricText.style.fontSize = fontSize.value + 'px';
+
   if(animMode === 'typewriter'){
     const cps = +document.getElementById('typeSpeed').value;
     const elapsed = t - active.start;
-    const exactChars = elapsed * cps;
-    const chars = Math.max(0, Math.min(active.text.length, Math.floor(exactChars)));
-    const shown = active.text.slice(0, chars);
-    const isTyping = chars < active.text.length;
-    const showCursor = document.getElementById('showCursor').checked;
-    let html = '';
-    for(let i=0;i<shown.length;i++){
-      const ch = shown[i] === ' ' ? '&nbsp;' : escapeHtml(shown[i]);
-      html += `<span class="letterFade">${ch}</span>`;
+    const targetChars = Math.max(0, Math.min(active.text.length, Math.floor(elapsed * cps)));
+
+    if(typewriterState.lineId !== active.id){
+      lyricText.innerHTML = '<span id="letterSpan"></span><span class="cursor" id="cursorSpan">_</span>';
+      typewriterState = { lineId: active.id, charsShown: 0 };
     }
-    if(showCursor){
-      const cursorVisible = isTyping || (Math.floor(t*2) % 2 === 0);
-      html += `<span class="cursor" style="opacity:${cursorVisible ? 1 : 0}">_</span>`;
+
+    const letterSpan = document.getElementById('letterSpan');
+    if(letterSpan && targetChars > typewriterState.charsShown){
+      for(let i = typewriterState.charsShown; i < targetChars; i++){
+        const ch = active.text[i];
+        const span = document.createElement('span');
+        span.className = 'letterFade';
+        span.innerHTML = ch === ' ' ? '&nbsp;' : escapeHtml(ch);
+        letterSpan.appendChild(span);
+      }
+      typewriterState.charsShown = targetChars;
     }
-    lyricText.innerHTML = html;
+
+    const cursorSpan = document.getElementById('cursorSpan');
+    if(cursorSpan){
+      const showCursor = document.getElementById('showCursor').checked;
+      if(!showCursor){
+        cursorSpan.style.opacity = 0;
+      } else {
+        const isTyping = targetChars < active.text.length;
+        const cursorVisible = isTyping || (Math.floor(t*2) % 2 === 0);
+        cursorSpan.style.opacity = cursorVisible ? 1 : 0;
+      }
+    }
   } else {
     lyricText.textContent = active.text;
+    typewriterState = { lineId: null, charsShown: 0 };
   }
   if(active.id !== selectedLineId){
     selectedLineId = active.id;

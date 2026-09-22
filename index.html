@@ -54,6 +54,13 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
   position:relative; width:100%; aspect-ratio:9/16; max-width:340px; margin:0 auto;
   background:#000; border-radius:10px; overflow:hidden; border:1px solid var(--border);
 }
+#stage.wide{aspect-ratio:16/9; max-width:100%;}
+.aspectRow{display:flex; gap:8px; justify-content:center; margin-bottom:10px;}
+.aspectRow button{flex:0 0 auto;}
+.aspectRow button.active{border-color:var(--accent); color:var(--accent);}
+.cursor{display:inline-block;}
+.cursor.blink{animation:blinkAnim 1s steps(1) infinite;}
+@keyframes blinkAnim{0%,49%{opacity:1;}50%,100%{opacity:0;}}
 #stageBgImg{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none;}
 #lyricText{
   position:absolute; left:5%; right:5%; text-align:center;
@@ -116,7 +123,20 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
           <option value="Arial, Helvetica, sans-serif">Arial</option>
           <option value="'Courier New', Courier, monospace">Courier New (mono)</option>
           <option value="Consolas, 'Cascadia Mono', monospace">Consolas (mono)</option>
+          <option value="__custom__">Custom (uploaded below)</option>
         </select>
+        <label for="customFontFile">Upload font file (.ttf/.otf/.woff/.woff2)</label>
+        <input type="file" id="customFontFile" accept=".ttf,.otf,.woff,.woff2">
+        <div class="status" id="fontStatus"></div>
+        <label for="animStyle">Text animation</label>
+        <select id="animStyle">
+          <option value="none">None (fade only)</option>
+          <option value="typewriter">Typewriter (types out each line)</option>
+        </select>
+        <div class="checkboxRow" id="cursorRow" style="display:none;">
+          <input type="checkbox" id="showCursor" checked>
+          <label style="margin:0;" for="showCursor">Blinking cursor while typing</label>
+        </div>
         <div class="row">
           <div>
             <label>Text color</label>
@@ -169,6 +189,11 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
     <div>
       <div class="card">
         <h2>Preview</h2>
+        <div class="aspectRow">
+          <button id="aspect9x16" class="small active">9:16 vertical</button>
+          <button id="aspect16x9" class="small">16:9 horizontal</button>
+          <button id="aspect1x1" class="small">1:1 square</button>
+        </div>
         <div id="stage">
           <img id="stageBgImg">
           <div id="lyricText"></div>
@@ -197,9 +222,9 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <h2>4. Export</h2>
         <label for="exportRes">Resolution</label>
         <select id="exportRes">
-          <option value="1080x1920">1080 x 1920 (vertical)</option>
-          <option value="1920x1080">1920 x 1080 (horizontal)</option>
-          <option value="1080x1080">1080 x 1080 (square)</option>
+          <option value="1080x1920" id="optVert">1080 x 1920 (vertical)</option>
+          <option value="1920x1080" id="optHoriz">1920 x 1080 (horizontal)</option>
+          <option value="1080x1080" id="optSquare">1080 x 1080 (square)</option>
         </select>
         <div class="checkboxRow">
           <input type="checkbox" id="includeAudioTransparent" checked>
@@ -382,10 +407,14 @@ document.getElementById('presetVintage').onclick = ()=>applyPreset('vintage');
 document.getElementById('presetTerminal').onclick = ()=>applyPreset('terminal');
 document.getElementById('presetCustom').onclick = markCustom;
 
+function activeFontFamily(){
+  if(fontFamily.value === '__custom__' && customFontFamily) return `"${customFontFamily}", sans-serif`;
+  return fontFamily.value;
+}
 function updateStyle(){
   fontSizeVal.textContent = fontSize.value;
   boxOpacityVal.textContent = boxOpacity.value;
-  lyricText.style.fontFamily = fontFamily.value;
+  lyricText.style.fontFamily = activeFontFamily();
   lyricText.style.color = textColor.value;
   lyricText.style.fontSize = fontSize.value + 'px';
   const oc = outlineColor.value;
@@ -405,6 +434,46 @@ function hexToRgb(hex){
   return {r:(v>>16)&255, g:(v>>8)&255, b:v&255};
 }
 updateStyle();
+
+// --- Aspect ratio ---
+function setAspect(mode){
+  document.getElementById('aspect9x16').classList.toggle('active', mode==='9x16');
+  document.getElementById('aspect16x9').classList.toggle('active', mode==='16x9');
+  document.getElementById('aspect1x1').classList.toggle('active', mode==='1x1');
+  stage.classList.remove('wide');
+  const res = document.getElementById('exportRes');
+  if(mode==='9x16'){ stage.style.aspectRatio='9/16'; stage.style.maxWidth='340px'; res.value='1080x1920'; }
+  else if(mode==='16x9'){ stage.style.aspectRatio='16/9'; stage.style.maxWidth='100%'; res.value='1920x1080'; }
+  else { stage.style.aspectRatio='1/1'; stage.style.maxWidth='340px'; res.value='1080x1080'; }
+}
+document.getElementById('aspect9x16').onclick = ()=>setAspect('9x16');
+document.getElementById('aspect16x9').onclick = ()=>setAspect('16x9');
+document.getElementById('aspect1x1').onclick = ()=>setAspect('1x1');
+
+// --- Custom font ---
+let customFontFamily = null;
+document.getElementById('customFontFile').addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  try{
+    const buf = await f.arrayBuffer();
+    customFontFamily = 'CustomUserFont';
+    const fontFace = new FontFace(customFontFamily, buf);
+    await fontFace.load();
+    document.fonts.add(fontFace);
+    fontFamily.value = '__custom__';
+    setStatus(document.getElementById('fontStatus'), 'Font loaded: ' + f.name, 'ok');
+    markCustom();
+    updateStyle();
+  }catch(err){
+    setStatus(document.getElementById('fontStatus'), 'Could not load that font file.', 'err');
+  }
+});
+
+// --- Animation controls ---
+document.getElementById('animStyle').addEventListener('change', (e)=>{
+  document.getElementById('cursorRow').style.display = e.target.value==='typewriter' ? 'flex' : 'none';
+});
 
 // --- Background controls ---
 document.querySelectorAll('input[name="bgType"]').forEach(r=>{
@@ -604,8 +673,20 @@ seek.addEventListener('input', ()=>{
 function updateLyricDisplay(){
   const t = audioEl.currentTime;
   const active = lines.find(l=>t>=l.start && t<l.end);
-  lyricText.textContent = active ? active.text : '';
-  if(active && active.id !== selectedLineId){
+  if(!active){ lyricText.innerHTML = ''; return; }
+  const animMode = document.getElementById('animStyle').value;
+  if(animMode === 'typewriter'){
+    const dur = Math.max(0.2, active.end - active.start);
+    const progress = Math.min(1, (t - active.start) / Math.min(dur, dur*0.7 + 0.6));
+    const chars = Math.floor(active.text.length * progress);
+    const shown = active.text.slice(0, chars);
+    const showCursor = document.getElementById('showCursor').checked;
+    const cursorHtml = showCursor ? '<span class="cursor blink">_</span>' : '';
+    lyricText.innerHTML = escapeHtml(shown) + (chars < active.text.length ? cursorHtml : (showCursor ? '<span class="cursor">_</span>' : ''));
+  } else {
+    lyricText.textContent = active.text;
+  }
+  if(active.id !== selectedLineId){
     selectedLineId = active.id;
     renderLineList();
   }
@@ -632,14 +713,26 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent){
     const active = lines.find(l=>t>=l.start && t<l.end);
     if(active){
       const fsz = Math.round((+fontSize.value) * (targetH/ (stage.clientHeight||640)));
-      ctx.font = `700 ${fsz}px ${fontFamily.value}`;
+      ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const yPct = +textPos.value/100;
       const y = targetH*yPct;
       const x = targetW/2;
       const maxW = targetW*0.9;
-      const words = active.text.split(' ');
+      const animMode = document.getElementById('animStyle').value;
+      let displayText = active.text;
+      if(animMode === 'typewriter'){
+        const dur = Math.max(0.2, active.end - active.start);
+        const progress = Math.min(1, (t - active.start) / Math.min(dur, dur*0.7 + 0.6));
+        const chars = Math.floor(active.text.length * progress);
+        displayText = active.text.slice(0, chars);
+        if(document.getElementById('showCursor').checked){
+          const cursorOn = Math.floor(t*2) % 2 === 0;
+          if(cursorOn || chars < active.text.length) displayText += '_';
+        }
+      }
+      const words = displayText.split(' ');
       let linesW = [];
       let cur = '';
       for(const w of words){

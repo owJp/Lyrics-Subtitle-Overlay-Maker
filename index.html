@@ -69,6 +69,10 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
   position:absolute; left:5%; right:5%; text-align:center;
   font-weight:700; white-space:nowrap; overflow:hidden;
 }
+#romajiText{
+  position:absolute; left:5%; right:5%; text-align:center;
+  font-weight:700; white-space:nowrap; overflow:hidden;
+}
 .transportBar{display:flex; align-items:center; gap:10px; margin-top:12px;}
 #seek{flex:1;}
 #timeLabel{font-size:12px; color:var(--text-dim); min-width:90px; text-align:right;}
@@ -173,6 +177,29 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
       </div>
 
       <div class="card">
+        <h2>Romaji / romanization</h2>
+        <label for="romajiLang">Convert main lyrics from</label>
+        <select id="romajiLang">
+          <option value="ja">Japanese to romaji</option>
+          <option value="ko">Korean to romanization</option>
+          <option value="zh">Chinese to pinyin</option>
+        </select>
+        <div class="row" style="margin-top:8px;">
+          <button id="romajiBtn" class="small">Convert to romaji</button>
+        </div>
+        <div class="status" id="romajiStatus"></div>
+        <div class="checkboxRow">
+          <input type="checkbox" id="showRomaji" checked>
+          <label style="margin:0;" for="showRomaji">Show romaji under lyrics</label>
+        </div>
+        <label for="romajiSize">Romaji size: <span id="romajiSizeVal">55</span>% of main text</label>
+        <input type="range" id="romajiSize" min="30" max="100" value="55">
+        <label for="romajiFile">Or load a separate romaji .srt/.lrc file</label>
+        <input type="file" id="romajiFile" accept=".srt,.lrc,.txt">
+        <div class="hint">Japanese conversion downloads a dictionary the first time (can take a moment). If it fails, load a manual romaji file instead - matched to the main lines in order.</div>
+      </div>
+
+      <div class="card">
         <h2>Translation</h2>
         <label for="translateApi">Translation API</label>
         <select id="translateApi">
@@ -220,7 +247,9 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         </div>
         <label for="translationSize">Translation size: <span id="translationSizeVal">60</span>% of main text</label>
         <input type="range" id="translationSize" min="30" max="100" value="60">
-        <div class="hint">Machine translation, so check it against the lyrics. Edit any line's translation in the list below after translating.</div>
+        <label for="translationFile">Or load a separate translated .srt/.lrc file</label>
+        <input type="file" id="translationFile" accept=".srt,.lrc,.txt">
+        <div class="hint">Machine translation, so check it against the lyrics. Edit any line's translation in the list below after translating, or skip the API and load your own translated file above (matched to the main lines in order).</div>
       </div>
 
       <div class="card">
@@ -257,6 +286,7 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <div id="stage">
           <img id="stageBgImg">
           <div id="lyricText"></div>
+          <div id="romajiText"></div>
           <div id="translationText"></div>
         </div>
         <div class="transportBar">
@@ -294,6 +324,26 @@ button:disabled{opacity:0.4; cursor:not-allowed;}
         <div class="checkboxRow">
           <input type="checkbox" id="cropToText">
           <label style="margin:0;" for="cropToText">Crop to text area only (thin strip, not full frame)</label>
+        </div>
+        <div class="checkboxRow">
+          <input type="checkbox" id="useTimeRange">
+          <label style="margin:0;" for="useTimeRange">Only export a specific time range</label>
+        </div>
+        <div id="timeRangeRow" style="display:none;">
+          <div class="row">
+            <div style="flex:1;">
+              <label for="exportStart">Start (mm:ss)</label>
+              <input type="text" id="exportStart" value="0:00">
+            </div>
+            <div style="flex:1;">
+              <label for="exportEnd">End (mm:ss)</label>
+              <input type="text" id="exportEnd" value="0:10">
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px;">
+            <button id="setStartToPlayhead" class="small">Set start to playhead</button>
+            <button id="setEndToPlayhead" class="small">Set end to playhead</button>
+          </div>
         </div>
         <div class="row" style="margin-top:8px;">
           <button id="exportBgBtn">Export with background</button>
@@ -418,6 +468,43 @@ document.getElementById('subFile').addEventListener('change', async (e)=>{
   drawWaveform();
 });
 
+function parseSubFileText(text, filename){
+  let parsed;
+  if(filename.toLowerCase().endsWith('.lrc')){
+    parsed = parseLRC(text);
+  } else {
+    parsed = parseSRT(text);
+    if(parsed.length === 0) parsed = parseLRC(text);
+  }
+  return parsed;
+}
+
+document.getElementById('romajiFile').addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  if(!lines.length){ setStatus(document.getElementById('romajiStatus'), 'Load the main lyrics file first.', 'err'); return; }
+  const text = await f.text();
+  const parsed = parseSubFileText(text, f.name);
+  if(parsed.length === 0){ setStatus(document.getElementById('romajiStatus'), 'Could not parse that file as SRT or LRC.', 'err'); return; }
+  lines.forEach((l,i)=>{ l.romaji = parsed[i] ? parsed[i].text : (l.romaji || ''); });
+  const mismatch = parsed.length !== lines.length ? ` (it has ${parsed.length} lines, main has ${lines.length} - matched by order, extra lines ignored)` : '';
+  setStatus(document.getElementById('romajiStatus'), 'Loaded romaji from ' + f.name + mismatch, mismatch ? 'err' : 'ok');
+  renderLineList();
+});
+
+document.getElementById('translationFile').addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  if(!lines.length){ setStatus(translateStatus, 'Load the main lyrics file first.', 'err'); return; }
+  const text = await f.text();
+  const parsed = parseSubFileText(text, f.name);
+  if(parsed.length === 0){ setStatus(translateStatus, 'Could not parse that file as SRT or LRC.', 'err'); return; }
+  lines.forEach((l,i)=>{ l.translation = parsed[i] ? parsed[i].text : (l.translation || ''); });
+  const mismatch = parsed.length !== lines.length ? ` (it has ${parsed.length} lines, main has ${lines.length} - matched by order, extra lines ignored)` : '';
+  setStatus(translateStatus, 'Loaded translation from ' + f.name + mismatch, mismatch ? 'err' : 'ok');
+  renderLineList();
+});
+
 document.getElementById('removeNotes').addEventListener('change', (e)=>{
   if(e.target.checked){
     lines.forEach(l => l.text = l.text.replace(/[\u266a\u266b]/g,'').trim());
@@ -441,6 +528,8 @@ const outlineWidth = document.getElementById('outlineWidth');
 const outlineWidthVal = document.getElementById('outlineWidthVal');
 const translationSize = document.getElementById('translationSize');
 const translationSizeVal = document.getElementById('translationSizeVal');
+const romajiSize = document.getElementById('romajiSize');
+const romajiSizeVal = document.getElementById('romajiSizeVal');
 
 function markCustom(){
   document.getElementById('presetVintage').classList.remove('active');
@@ -448,10 +537,11 @@ function markCustom(){
   document.getElementById('presetCustom').classList.add('active');
 }
 
-[fontFamily, textColor, outlineColor, boxColor, fontSize, boxOpacity, textPos, outlineWidth, translationSize].forEach(el=>{
+[fontFamily, textColor, outlineColor, boxColor, fontSize, boxOpacity, textPos, outlineWidth, translationSize, romajiSize].forEach(el=>{
   el.addEventListener('input', ()=>{ updateStyle(); if(el!==textPos) markCustom(); });
 });
 document.getElementById('showTranslation').addEventListener('change', updateStyle);
+document.getElementById('showRomaji').addEventListener('change', updateStyle);
 
 function applyPreset(kind){
   document.getElementById('presetVintage').classList.toggle('active', kind==='vintage');
@@ -502,6 +592,7 @@ function updateStyle(){
   boxOpacityVal.textContent = boxOpacity.value;
   outlineWidthVal.textContent = outlineWidth.value;
   translationSizeVal.textContent = translationSize.value;
+  romajiSizeVal.textContent = romajiSize.value;
   lyricText.style.fontFamily = activeFontFamily();
   lyricText.style.color = textColor.value;
   lyricText.style.fontSize = fontSize.value + 'px';
@@ -514,12 +605,26 @@ function updateStyle(){
   lyricText.style.borderRadius = '4px';
   const posPct = +textPos.value;
   lyricText.style.top = posPct + '%';
+
+  const showRomaji = document.getElementById('showRomaji').checked;
+  const romajiText = document.getElementById('romajiText');
+  const romajiFsz = Math.round((+fontSize.value) * (+romajiSize.value/100));
+  romajiText.style.fontFamily = activeFontFamily();
+  romajiText.style.color = textColor.value;
+  romajiText.style.fontSize = romajiFsz + 'px';
+  romajiText.style.textShadow = outlineShadow(oc, Math.max(1, Math.round(+outlineWidth.value*0.7)));
+  const gapMain = (+fontSize.value)*1.15;
+  romajiText.style.top = `calc(${posPct}% + ${gapMain}px)`;
+  romajiText.style.transform = 'translateY(-50%)';
+  romajiText.style.display = showRomaji ? 'block' : 'none';
+
   const translationText = document.getElementById('translationText');
   translationText.style.fontFamily = activeFontFamily();
   translationText.style.color = textColor.value;
   translationText.style.fontSize = Math.round((+fontSize.value) * (+translationSize.value/100)) + 'px';
   translationText.style.textShadow = outlineShadow(oc, Math.max(1, Math.round(+outlineWidth.value*0.7)));
-  const gap = (+fontSize.value)*1.15;
+  const romajiGap = showRomaji ? romajiFsz*1.15 : 0;
+  const gap = gapMain + romajiGap;
   translationText.style.top = `calc(${posPct}% + ${gap}px)`;
   translationText.style.transform = 'translateY(-50%)';
   translationText.style.display = document.getElementById('showTranslation').checked ? 'block' : 'none';
@@ -545,6 +650,17 @@ function setAspect(mode){
 document.getElementById('aspect9x16').onclick = ()=>setAspect('9x16');
 document.getElementById('aspect16x9').onclick = ()=>setAspect('16x9');
 document.getElementById('aspect1x1').onclick = ()=>setAspect('1x1');
+
+// --- Export time range ---
+document.getElementById('useTimeRange').addEventListener('change', (e)=>{
+  document.getElementById('timeRangeRow').style.display = e.target.checked ? 'block' : 'none';
+});
+document.getElementById('setStartToPlayhead').addEventListener('click', ()=>{
+  document.getElementById('exportStart').value = formatTimeForInput(audioEl.currentTime);
+});
+document.getElementById('setEndToPlayhead').addEventListener('click', ()=>{
+  document.getElementById('exportEnd').value = formatTimeForInput(audioEl.currentTime);
+});
 
 // --- Custom font ---
 let customFontFamily = null;
@@ -612,6 +728,26 @@ function fmt(t){
   const s = (t%60).toFixed(1);
   return m + ':' + s.padStart(4,'0');
 }
+function parseTimeStr(str){
+  if(!str) return null;
+  const parts = str.trim().split(':');
+  if(parts.length === 1){
+    const s = parseFloat(parts[0]);
+    return isNaN(s) ? null : s;
+  }
+  if(parts.length === 2){
+    const m = parseInt(parts[0],10);
+    const s = parseFloat(parts[1]);
+    if(isNaN(m) || isNaN(s)) return null;
+    return m*60 + s;
+  }
+  return null;
+}
+function formatTimeForInput(t){
+  const m = Math.floor(t/60);
+  const s = Math.floor(t%60);
+  return m + ':' + String(s).padStart(2,'0');
+}
 
 function renderLineList(){
   const list = document.getElementById('lineList');
@@ -628,7 +764,8 @@ function renderLineList(){
         <button class="small" data-act="back" data-id="${l.id}">-0.1s</button>
         <button class="small" data-act="fwd" data-id="${l.id}">+0.1s</button>
       </span>
-      ${l.translation !== undefined ? `<input type="text" class="translationInput" data-id="${l.id}" value="${escapeAttr(l.translation)}" style="width:100%; margin-top:4px; font-size:12px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:4px 6px;">` : ''}
+      ${l.romaji !== undefined ? `<input type="text" class="romajiInput" data-id="${l.id}" value="${escapeAttr(l.romaji)}" placeholder="romaji" style="width:100%; margin-top:4px; font-size:12px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:4px 6px;">` : ''}
+      ${l.translation !== undefined ? `<input type="text" class="translationInput" data-id="${l.id}" value="${escapeAttr(l.translation)}" placeholder="translation" style="width:100%; margin-top:4px; font-size:12px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:4px 6px;">` : ''}
     `;
     div.addEventListener('click', (e)=>{
       if(e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
@@ -655,6 +792,14 @@ function renderLineList(){
       const id = +inp.dataset.id;
       const line = lines.find(x=>x.id===id);
       if(line) line.translation = inp.value;
+    });
+    inp.addEventListener('click', (e)=>e.stopPropagation());
+  });
+  list.querySelectorAll('.romajiInput').forEach(inp=>{
+    inp.addEventListener('input', (e)=>{
+      const id = +inp.dataset.id;
+      const line = lines.find(x=>x.id===id);
+      if(line) line.romaji = inp.value;
     });
     inp.addEventListener('click', (e)=>e.stopPropagation());
   });
@@ -842,6 +987,8 @@ function updateLyricDisplay(){
     lyricText.textContent = active.text;
     typewriterState = { lineId: null, charsShown: 0 };
   }
+  const romajiText = document.getElementById('romajiText');
+  romajiText.textContent = active.romaji || '';
   const translationText = document.getElementById('translationText');
   translationText.textContent = active.translation || '';
   if(active.id !== selectedLineId){
@@ -926,6 +1073,95 @@ document.getElementById('translateBtn').addEventListener('click', async ()=>{
   btn.disabled = false;
 });
 
+// --- Romaji / romanization ---
+function koreanToRomanization(text){
+  const CHO = ['g','kk','n','d','tt','r','m','b','pp','s','ss','','j','jj','c','k','t','p','h'];
+  const JUNG = ['a','ae','ya','yae','eo','e','yeo','ye','o','wa','wae','oe','yo','u','weo','we','wi','yu','eu','ui','i'];
+  const JONG = ['','g','kk','gs','n','nj','nh','d','l','lg','lm','lb','ls','lt','lp','lh','m','b','bs','s','ss','ng','j','c','k','t','p','h'];
+  let out = '';
+  for(const ch of text){
+    const code = ch.codePointAt(0);
+    if(code >= 0xAC00 && code <= 0xD7A3){
+      const offset = code - 0xAC00;
+      const cho = Math.floor(offset / (21*28));
+      const jung = Math.floor((offset % (21*28)) / 28);
+      const jong = offset % 28;
+      out += CHO[cho] + JUNG[jung] + JONG[jong];
+    } else {
+      out += ch;
+    }
+  }
+  return out.replace(/\s+/g,' ').trim();
+}
+
+let pinyinProLoaded = false;
+function loadScriptOnce(src){
+  return new Promise((resolve,reject)=>{
+    if(document.querySelector(`script[src="${src}"]`)){ resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = ()=>reject(new Error('failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function chineseToPinyin(text){
+  if(!pinyinProLoaded){
+    await loadScriptOnce('https://cdn.jsdelivr.net/npm/pinyin-pro@3/dist/index.js');
+    pinyinProLoaded = true;
+  }
+  const engine = window.pinyinPro || window.PinyinPro;
+  if(!engine || !engine.pinyin) throw new Error('pinyin-pro did not load');
+  return engine.pinyin(text, { toneType: 'symbol', separator: ' ' });
+}
+
+let kuroshiroInstance = null;
+async function japaneseToRomaji(text){
+  if(!kuroshiroInstance){
+    await loadScriptOnce('https://cdn.jsdelivr.net/npm/kuroshiro@1.1.2/dist/kuroshiro.min.js');
+    await loadScriptOnce('https://cdn.jsdelivr.net/npm/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js');
+    const Kuroshiro = window.Kuroshiro ? window.Kuroshiro.default || window.Kuroshiro : null;
+    const KuromojiAnalyzer = window.KuromojiAnalyzer ? (window.KuromojiAnalyzer.default || window.KuromojiAnalyzer) : null;
+    if(!Kuroshiro || !KuromojiAnalyzer) throw new Error('kuroshiro did not load');
+    const instance = new Kuroshiro();
+    await instance.init(new KuromojiAnalyzer({ dictPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' }));
+    kuroshiroInstance = instance;
+  }
+  return await kuroshiroInstance.convert(text, { to: 'romaji', mode: 'spaced', romajiSystem: 'hepburn' });
+}
+
+document.getElementById('romajiBtn').addEventListener('click', async ()=>{
+  const romajiStatus = document.getElementById('romajiStatus');
+  if(!lines.length){ setStatus(romajiStatus, 'Load the main lyrics file first.', 'err'); return; }
+  const lang = document.getElementById('romajiLang').value;
+  const btn = document.getElementById('romajiBtn');
+  btn.disabled = true;
+  let failCount = 0;
+  for(let i=0;i<lines.length;i++){
+    setStatus(romajiStatus, `Converting line ${i+1} of ${lines.length}${lang==='ja' ? ' (loading dictionary on first line, can take a while)' : ''}...`, 'ok');
+    try{
+      if(lang === 'ko'){
+        lines[i].romaji = koreanToRomanization(lines[i].text);
+      } else if(lang === 'zh'){
+        lines[i].romaji = await chineseToPinyin(lines[i].text);
+      } else {
+        lines[i].romaji = await japaneseToRomaji(lines[i].text);
+      }
+    }catch(err){
+      failCount++;
+      lines[i].romaji = lines[i].romaji || '';
+    }
+  }
+  renderLineList();
+  if(failCount > 0){
+    setStatus(romajiStatus, `Converted ${lines.length - failCount} of ${lines.length} lines. ${failCount} failed to load the converter - check your connection, or load a manual romaji file instead.`, 'err');
+  } else {
+    setStatus(romajiStatus, 'Converted ' + lines.length + ' lines. Check and edit any that look off below.', 'ok');
+  }
+  btn.disabled = false;
+});
+
 // --- Export ---
 function buildFrameDrawer(canvas, targetW, targetH, transparent, refH){
   const ctx = canvas.getContext('2d');
@@ -992,6 +1228,27 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent, refH){
       ctx.fillStyle = textColor.value;
       ctx.fillText(fullLine, x, y);
 
+      let stackY = y + fsz*1.15;
+      const showRomaji = document.getElementById('showRomaji').checked;
+      if(showRomaji && active.romaji){
+        let rsz = Math.round(fsz * (+romajiSize.value/100));
+        ctx.font = `700 ${rsz}px ${activeFontFamily()}`;
+        while(ctx.measureText(active.romaji).width > maxW && rsz > 6){
+          rsz -= 1;
+          ctx.font = `700 ${rsz}px ${activeFontFamily()}`;
+        }
+        const rowPx = Math.max(1, owPx*0.7);
+        if(rowPx > 0){
+          ctx.lineWidth = rowPx;
+          ctx.strokeStyle = outlineColor.value;
+          ctx.strokeText(active.romaji, x, stackY);
+        }
+        ctx.fillStyle = textColor.value;
+        ctx.fillText(active.romaji, x, stackY);
+        stackY += rsz*1.15;
+        ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
+      }
+
       if(document.getElementById('showTranslation').checked && active.translation){
         let tsz = Math.round(fsz * (+translationSize.value/100));
         ctx.font = `700 ${tsz}px ${activeFontFamily()}`;
@@ -999,15 +1256,14 @@ function buildFrameDrawer(canvas, targetW, targetH, transparent, refH){
           tsz -= 1;
           ctx.font = `700 ${tsz}px ${activeFontFamily()}`;
         }
-        const ty = y + fsz*1.15;
         const towPx = Math.max(1, owPx*0.7);
         if(towPx > 0){
           ctx.lineWidth = towPx;
           ctx.strokeStyle = outlineColor.value;
-          ctx.strokeText(active.translation, x, ty);
+          ctx.strokeText(active.translation, x, stackY);
         }
         ctx.fillStyle = textColor.value;
-        ctx.fillText(active.translation, x, ty);
+        ctx.fillText(active.translation, x, stackY);
         ctx.font = `700 ${fsz}px ${activeFontFamily()}`;
       }
     }
@@ -1051,12 +1307,21 @@ async function runExport(transparent){
   const chunks = [];
   recorder.ondataavailable = (e)=>{ if(e.data.size>0) chunks.push(e.data); };
 
-  setStatus(exportStatus, 'Recording... click Stop recording to finish early, or let the song play to the end.', 'ok');
+  const useRange = document.getElementById('useTimeRange').checked;
+  const rangeStart = useRange ? parseTimeStr(document.getElementById('exportStart').value) : 0;
+  const rangeEnd = useRange ? parseTimeStr(document.getElementById('exportEnd').value) : (audioEl.duration || Infinity);
+  if(useRange && (rangeStart === null || rangeEnd === null || rangeEnd <= rangeStart)){
+    setStatus(exportStatus, 'Check the start/end times - use mm:ss, and end must be after start.', 'err');
+    exportBgBtn.disabled = false; exportAlphaBtn.disabled = false;
+    return;
+  }
+
+  setStatus(exportStatus, 'Recording... click Stop recording to finish early, or let it reach the end point.', 'ok');
   exportBgBtn.disabled = true; exportAlphaBtn.disabled = true; stopExportBtn.disabled = false;
   stopRequested = false;
   activeRecorder = recorder;
 
-  audioEl.currentTime = 0;
+  audioEl.currentTime = rangeStart;
   await new Promise(r=>setTimeout(r,100));
 
   recorder.start();
@@ -1068,8 +1333,17 @@ async function runExport(transparent){
 
   await new Promise(resolve=>{
     audioEl.onended = resolve;
+    const checkEnd = ()=>{
+      if(audioEl.currentTime >= rangeEnd){
+        audioEl.removeEventListener('timeupdate', checkEnd);
+        audioEl.pause();
+        resolve();
+      }
+    };
+    if(isFinite(rangeEnd)) audioEl.addEventListener('timeupdate', checkEnd);
     stopExportBtn.onclick = ()=>{
       stopRequested = true;
+      audioEl.removeEventListener('timeupdate', checkEnd);
       audioEl.pause();
       resolve();
     };
